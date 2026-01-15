@@ -49,6 +49,7 @@ app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 CORS(app)
 print("vv")
+print("hhh")
 
 DB_NAME = "/data/nutrioptimal.db"
 last_prices_update = None
