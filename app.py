@@ -60,6 +60,7 @@ import threading
 price_update_tasks = {}
 tasks_lock = threading.Lock()
 print("hh")
+print("ggg")
 
 def is_admin():
     # אם אין משתמש מחובר – לא אדמין
