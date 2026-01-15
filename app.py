@@ -236,6 +236,43 @@ def init_db():
         )
     ''')
 
+    # ===== 🆕 טבלאות לניהול מזונות אישיים =====
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS system_foods (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            protein REAL,
+            calories REAL,
+            carbs REAL,
+            fat REAL,
+            category TEXT,
+            allowed_meals TEXT,
+            price_manual REAL,
+            price_shufersal REAL,
+            price_rami_levy REAL,
+            price_victory REAL,
+            active_price_source TEXT
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_foods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            food_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            food_data TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+
+    # אינדקסים לשיפור ביצועים
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_foods_user_id ON user_foods(user_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_foods_food_id ON user_foods(food_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_foods_action ON user_foods(action)')
+
     conn.commit()
     conn.close()
 
@@ -393,18 +430,22 @@ def get_default_foods():
     return foods
 
 
-foods_db = get_default_foods()
+# 🆕 טעינת מזונות המערכת הבסיסיים
+system_foods_db = get_default_foods()
+
+# 🔄 משתנה זה נשאר לצרכי תאימות, אך לא ישמש יותר
+foods_db = system_foods_db
 
 def update_all_prices():
     global last_prices_update
 
-    product_names = [food["name"] for food in foods_db]
+    product_names = [food["name"] for food in system_foods_db]
 
     shufersal = get_prices_shufersal(product_names)
     victory = get_prices_victory(product_names)
     rami = get_prices_from_rami_levy(product_names)
 
-    for i, food in enumerate(foods_db):
+    for i, food in enumerate(system_foods_db):
         food["prices"]["shufersal"] = shufersal[i] * 100 if shufersal[i] > 0 else None
         food["prices"]["victory"] = victory[i] * 100 if victory[i] > 0 else None
         food["prices"]["rami_levy"] = rami[i] * 100 if rami[i] > 0 else None
@@ -663,11 +704,76 @@ def check_auth():
 # =========================
 # API מזון
 # =========================
+
+# 🆕 פונקציה לקבלת רשימת מזונות אישית למשתמש
+def get_user_foods_list(user_id):
+    """
+    שליפת רשימת מזונות אישית למשתמש
+    משלב בין מזונות המערכת לשינויים האישיים
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    
+    # שליפת רשימת המזונות הבסיסית מהמערכת
+    cursor.execute('SELECT * FROM system_foods')
+    system_foods = cursor.fetchall()
+    
+    # המרה למבנה נתונים מוכר
+    foods = []
+    columns = [desc[0] for desc in cursor.description]
+    for row in system_foods:
+        food = dict(zip(columns, row))
+        # המרת נתוני מחירים למבנה מחירים
+        food['prices'] = {
+            'manual': food.pop('price_manual', None),
+            'shufersal': food.pop('price_shufersal', None),
+            'rami_levy': food.pop('price_rami_levy', None),
+            'victory': food.pop('price_victory', None)
+        }
+        foods.append(food)
+    
+    # שליפת השינויים האישיים של המשתמש
+    cursor.execute('''
+        SELECT food_id, action, food_data 
+        FROM user_foods 
+        WHERE user_id = ? 
+        ORDER BY created_at
+    ''', (user_id,))
+    
+    user_changes = cursor.fetchall()
+    
+    # יישום השינויים האישיים על רשימת המזונות
+    for food_id, action, food_data in user_changes:
+        food_data = json.loads(food_data) if food_data else {}
+        
+        if action == 'delete':
+            # מחיקת מזון מהרשימה
+            foods = [f for f in foods if f['id'] != food_id]
+        
+        elif action == 'add':
+            # הוספת מזון חדש
+            if not any(f['id'] == food_id for f in foods):
+                foods.append(food_data)
+        
+        elif action == 'edit':
+            # עדכון מזון קיים
+            for idx, food in enumerate(foods):
+                if food['id'] == food_id:
+                    foods[idx] = food_data
+                    break
+    
+    conn.close()
+    return foods
+
+
 @app.route('/api/foods', methods=['GET'])
 def get_foods():
     if not is_logged_in():
         return jsonify({'success': False}), 401
-    return jsonify({'success': True, 'data': foods_db})
+    
+    user_id = session.get('user_id')
+    user_foods = get_user_foods_list(user_id)
+    return jsonify({'success': True, 'data': user_foods})
 
 
 @app.route('/api/foods', methods=['POST'])
@@ -676,15 +782,17 @@ def add_food():
         return jsonify({'success': False}), 401
 
     data = request.get_json()
-    global foods_db
-
+    user_id = session.get('user_id')
+    
+    # קבלת רשימת המזונות האישית של המשתמש
+    user_foods = get_user_foods_list(user_id)
+    
     existing_ids = [
-        int(f["id"]) for f in foods_db
+        int(f["id"]) for f in user_foods
         if str(f["id"]).isdigit()
     ]
 
     new_id = str(max(existing_ids) + 1 if existing_ids else 1)
-
 
     new_food = {
         'id': new_id,
@@ -704,7 +812,15 @@ def add_food():
         'allowed_meals': data['allowed_meals']
     }
 
-    foods_db.append(new_food)
+    # 🆕 שמירת השינוי האישי למסד הנתונים
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO user_foods (user_id, food_id, action, food_data)
+        VALUES (?, ?, 'add', ?)
+    ''', (user_id, new_id, json.dumps(new_food)))
+    conn.commit()
+    conn.close()
 
     # 🔍 התחלת חיפוש מחירים אסינכרוני למזון החדש
     task_id = start_price_update_task(new_id, new_food['name'])
@@ -771,11 +887,14 @@ def update_food(food_id):
         return jsonify({'success': False}), 401
 
     data = request.get_json()
-    global foods_db
+    user_id = session.get('user_id')
+
+    # קבלת רשימת המזונות האישית של המשתמש
+    user_foods = get_user_foods_list(user_id)
 
     # 1️⃣ מציאת הפריט והאינדקס שלו
     old_index = None
-    for idx, food in enumerate(foods_db):
+    for idx, food in enumerate(user_foods):
         if food['id'] == food_id:
             old_index = idx
             break
@@ -783,17 +902,14 @@ def update_food(food_id):
     if old_index is None:
         return jsonify({'success': False}), 404
 
-    # 2️⃣ מחיקת הפריט הישן
-    foods_db.pop(old_index)
-
-    # 3️⃣ יצירת ID חדש (max + 1)
+    # 2️⃣ יצירת ID חדש (max + 1)
     existing_ids = [
-        int(f["id"]) for f in foods_db
+        int(f["id"]) for f in user_foods
         if str(f["id"]).isdigit()
     ]
     new_id = str(max(existing_ids) + 1 if existing_ids else 1)
 
-    # 4️⃣ יצירת פריט חדש מהנתונים שנשלחו
+    # 3️⃣ יצירת פריט חדש מהנתונים שנשלחו
     new_food = {
         'id': new_id,
         'name': data['name'],
@@ -812,8 +928,15 @@ def update_food(food_id):
         'allowed_meals': data['allowed_meals']
     }
 
-    # 5️⃣ החזרה בדיוק לאותו מקום ברשימה
-    foods_db.insert(old_index, new_food)
+    # 🆕 שמירת השינוי האישי למסד הנתונים
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO user_foods (user_id, food_id, action, food_data)
+        VALUES (?, ?, 'edit', ?)
+    ''', (user_id, new_id, json.dumps(new_food)))
+    conn.commit()
+    conn.close()
 
     # 6️⃣ התחלת עדכון מחירים אסינכרוני (כמו בהוספה)
     task_id = start_price_update_task(new_id, new_food['name'])
@@ -867,8 +990,18 @@ def delete_food(food_id):
     if not is_logged_in():
         return jsonify({'success': False}), 401
 
-    global foods_db
-    foods_db = [food for food in foods_db if food['id'] != food_id]
+    user_id = session.get('user_id')
+
+    # 🆕 שמירת השינוי האישי למסד הנתונים
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO user_foods (user_id, food_id, action, food_data)
+        VALUES (?, ?, 'delete', NULL)
+    ''', (user_id, food_id))
+    conn.commit()
+    conn.close()
+
     return jsonify({'success': True})
 
 
@@ -884,7 +1017,11 @@ def export_foods():
     headers = ['ID', 'שם', 'חלבון', 'קלוריות', 'פחמימות', 'שומנים', 'מחיר פעיל', 'מקור מחיר']
     ws.append(headers)
 
-    for food in foods_db:
+    # 🆕 שליפת רשימת המזונות האישית של המשתמש המחובר
+    user_id = session.get('user_id')
+    user_foods = get_user_foods_list(user_id)
+
+    for food in user_foods:
         ws.append([
             food['id'],
             food['name'],
@@ -1007,8 +1144,12 @@ def export_menu():
                 row += 1
 
                 for item in items:
+                    # 🆕 שליפת המזון מרשימת המזונות האישית של המשתמש
+                    user_id = session.get('user_id')
+                    user_foods = get_user_foods_list(user_id)
+                    
                     food = next(
-                        (f for f in foods_db if f['name'] == item['name']),
+                        (f for f in user_foods if f['name'] == item['name']),
                         None
                     )
 
@@ -1280,8 +1421,12 @@ def calculate_menu():
             'max_fat': float(data.get('max_fat', 90))
         }
 
+        # 🆕 שליפת רשימת המזונות האישית של המשתמש
+        user_id = session.get('user_id')
+        user_foods = get_user_foods_list(user_id)
+
         result, chosen_source = run_optimizer_for_all_price_sources(
-            foods_db,
+            user_foods,
             user_params,
             selected_sources
         )
