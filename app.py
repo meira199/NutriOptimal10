@@ -61,20 +61,25 @@ price_update_tasks = {}
 tasks_lock = threading.Lock()
 
 def is_admin():
-    if 'user_id' not in session:
+    # אם אין משתמש מחובר – לא אדמין
+    user_id = session.get('user_id')
+    if not user_id:
         return False
 
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT email FROM users WHERE id = ?", (session['user_id'],))
+    cursor.execute(
+        "SELECT email FROM users WHERE id = ?",
+        (user_id,)
+    )
     row = cursor.fetchone()
     conn.close()
 
     if not row:
         return False
 
-    admin_email = "meira199@gmail.com"
-    return row[0] == admin_email
+    return row[0] == "meira199@gmail.com"
+
 
 
 
