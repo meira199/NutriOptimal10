@@ -49,7 +49,7 @@ app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 CORS(app)
 
-DB_NAME = 'nutrioptimal.db'
+DB_NAME = os.environ.get("DB_PATH", "nutrioptimal.db")
 last_prices_update = None
 
 # ============================
