@@ -107,33 +107,40 @@ def update_task_status(task_id, status, message=None):
                 price_update_tasks[task_id]['completed_at'] = datetime.now().isoformat()
 
 def update_prices_for_single_food_async(food_id, task_id):
-    """עדכון מחירים אסינכרוני לפריט בודד
-    באותה לוגיקה של update_all_prices (רשימה בגודל 1)
-    """
     try:
-        # מציאת הפריט
-        food = None
-        for f in foods_db:
-            if f['id'] == food_id:
-                food = f
-                break
+        update_task_status(task_id, 'running', 'מחפש מחירים...')
 
-        if not food:
-            print(f"❌ [ASYNC] הפריט {food_id} לא נמצא")
-            update_task_status(task_id, 'failed', 'הפריט לא נמצא')
+        # 1) להביא שם מוצר מה-DB (system_foods או user_foods)
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+
+        # קודם ננסה ב-system_foods
+        cursor.execute("SELECT name FROM system_foods WHERE id = ?", (food_id,))
+        row = cursor.fetchone()
+
+        # אם לא נמצא, ננסה ב-user_foods (הפריט האחרון שנשמר עם אותו food_id)
+        if not row:
+            cursor.execute("""
+                SELECT food_data FROM user_foods
+                WHERE food_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (food_id,))
+            r2 = cursor.fetchone()
+            if r2 and r2[0]:
+                data = json.loads(r2[0])
+                row = (data.get("name"),)
+
+        conn.close()
+
+        if not row or not row[0]:
+            update_task_status(task_id, 'failed', 'הפריט לא נמצא במסד')
             return
 
-        product_name = food['name']
-        separator = '=' * 60
-        print(f"\n{separator}")
-        print(f"🔍 [ASYNC] מתחיל חיפוש מחירים עבור: {product_name}")
-        print(f"{separator}")
-
-        update_task_status(task_id, 'running', f'מחפש מחירים עבור: {product_name}...')
-
-        # === אותה לוגיקה של עדכון כללי – רשימה בגודל 1 ===
+        product_name = row[0]
         product_names = [product_name]
 
+        # 2) סקרייפינג
         shufersal = get_prices_shufersal(product_names)
         victory   = get_prices_victory(product_names)
         rami      = get_prices_from_rami_levy(product_names)
@@ -142,34 +149,57 @@ def update_prices_for_single_food_async(food_id, task_id):
         vic  = victory[0]
         ram  = rami[0]
 
-        # עדכון המחירים (בדיוק כמו update_all_prices)
-        food['prices']['shufersal'] = shuf * 100 if shuf > 0 else None
-        food['prices']['victory']   = vic  * 100 if vic  > 0 else None
-        food['prices']['rami_levy'] = ram  * 100 if ram  > 0 else None
+        shuf_price = shuf * 100 if shuf and shuf > 0 else None
+        vic_price  = vic  * 100 if vic  and vic  > 0 else None
+        ram_price  = ram  * 100 if ram  and ram  > 0 else None
 
-        print(f"\n📊 סיכום מחירים עבור {product_name}:")
-        if shuf > 0:
-            print(f"   • שופרסל: {shuf:.2f} ₪")
+        # 3) עדכון למסד
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+
+        # אם זה מוצר מערכת – לעדכן system_foods
+        cursor.execute("SELECT 1 FROM system_foods WHERE id = ?", (food_id,))
+        if cursor.fetchone():
+            cursor.execute("""
+                UPDATE system_foods
+                SET price_shufersal = ?,
+                    price_victory = ?,
+                    price_rami_levy = ?
+                WHERE id = ?
+            """, (shuf_price, vic_price, ram_price, food_id))
         else:
-            print(f"   • שופרסל: לא נמצא")
+            # אם זה מוצר של משתמש – לעדכן את הרשומה האחרונה ב-user_foods (action add/edit)
+            cursor.execute("""
+                SELECT id, food_data FROM user_foods
+                WHERE food_id = ? AND action IN ('add','edit')
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (food_id,))
+            rec = cursor.fetchone()
+            if rec and rec[1]:
+                rec_id, food_data_json = rec
+                food_data = json.loads(food_data_json)
 
-        if vic > 0:
-            print(f"   • ויקטורי: {vic:.2f} ₪")
-        else:
-            print(f"   • ויקטורי: לא נמצא")
+                food_data.setdefault("prices", {})
+                food_data["prices"]["shufersal"] = shuf_price
+                food_data["prices"]["victory"] = vic_price
+                food_data["prices"]["rami_levy"] = ram_price
 
-        if ram > 0:
-            print(f"   • רמי לוי: {ram:.2f} ₪")
-        else:
-            print(f"   • רמי לוי: לא נמצא")
+                cursor.execute("""
+                    UPDATE user_foods
+                    SET food_data = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (json.dumps(food_data, ensure_ascii=False), rec_id))
 
-        print(f"{separator}\n")
+        conn.commit()
+        conn.close()
 
         update_task_status(task_id, 'completed', 'המחירים עודכנו בהצלחה')
 
     except Exception as e:
         print(f"\n❌ [ASYNC] שגיאה בעדכון מחירים: {e}")
         update_task_status(task_id, 'failed', f'שגיאה בעדכון מחירים: {str(e)}')
+
 
 
 def start_price_update_task(food_id, food_name):
@@ -218,23 +248,7 @@ def init_db():
         )
     ''')
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS foods (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            protein REAL,
-            calories REAL,
-            carbs REAL,
-            fat REAL,
-            category TEXT,
-            allowed_meals TEXT,
-            price_manual REAL,
-            price_shufersal REAL,
-            price_rami_levy REAL,
-            price_victory REAL,
-            active_price_source TEXT
-        )
-    ''')
+    
 
     # ===== 🆕 טבלאות לניהול מזונות אישיים =====
     cursor.execute('''
@@ -277,65 +291,59 @@ def init_db():
     conn.close()
 
 
-def get_default_foods():
-    foods = [
-        # ... כל הרשימה ששלחת ליך ...
-    ]
 
-    # חשוב מאוד!
-    # אם אתה מעדכן עם prices כמו בקוד של ה-seed:
-    for f in foods:
-        f["prices"] = {
-            "manual": f.pop("price", None),
-            "shufersal": None,
-            "rami_levy": None,
-            "victory": None
-        }
-        f["active_price_source"] = "manual"
 
-    return foods
 
-def seed_foods_if_empty():
+
+
+
+def seed_system_foods_if_empty():
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    # אם כבר יש מזונות בטבלה - לא עושים כלום
-    cur.execute("SELECT COUNT(*) FROM foods")
-    count = cur.fetchone()[0]
-    if count > 0:
+    cur.execute("SELECT COUNT(*) FROM system_foods")
+    if cur.fetchone()[0] > 0:
         conn.close()
         return
 
-    # מכניסים את ברירת המחדל מהקוד
     foods = get_default_foods()
 
     for f in foods:
-        allowed_meals_str = json.dumps(f.get("allowed_meals", []), ensure_ascii=False)
-
-        prices = f.get("prices", {})
-        price_manual = prices.get("manual", None)
-        price_shufersal = prices.get("shufersal", None)
-        price_rami_levy = prices.get("rami_levy", None)
-        price_victory = prices.get("victory", None)
-
-        active_src = f.get("active_price_source", "manual")
+        # ✅ עובד גם אם יש price וגם אם כבר הומר ל-prices.manual
+        manual_price = f.get("price")
+        if manual_price is None:
+            manual_price = (f.get("prices") or {}).get("manual")
 
         cur.execute("""
-            INSERT INTO foods (
+            INSERT INTO system_foods (
                 id, name, protein, calories, carbs, fat, category, allowed_meals,
-                price_manual, price_shufersal, price_rami_levy, price_victory, active_price_source
+                price_manual, price_shufersal, price_rami_levy, price_victory,
+                active_price_source
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            f["id"], f["name"], f["protein"], f["calories"], f["carbs"], f["fat"], f["category"], allowed_meals_str,
-            price_manual, price_shufersal, price_rami_levy, price_victory, active_src
+            f["id"],
+            f["name"],
+            f["protein"],
+            f["calories"],
+            f["carbs"],
+            f["fat"],
+            f["category"],
+            json.dumps(f["allowed_meals"], ensure_ascii=False),
+            manual_price,
+            None,
+            None,
+            None,
+            "manual"
         ))
 
     conn.commit()
     conn.close()
 
-init_db()
-seed_foods_if_empty()
+
+
+
+
 
 
 # =========================
@@ -430,28 +438,58 @@ def get_default_foods():
     return foods
 
 
-# 🆕 טעינת מזונות המערכת הבסיסיים
-system_foods_db = get_default_foods()
-
-# 🔄 משתנה זה נשאר לצרכי תאימות, אך לא ישמש יותר
-foods_db = system_foods_db
+# =========================
+# INIT DATABASE & SEED
+# =========================
+init_db()
+seed_system_foods_if_empty()
 
 def update_all_prices():
     global last_prices_update
 
-    product_names = [food["name"] for food in system_foods_db]
+    # 1) שליפת כל המוצרים מה-DB
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM system_foods")
+    rows = cursor.fetchall()
+    conn.close()
 
+    if not rows:
+        last_prices_update = datetime.now()
+        print("⚠️ אין מזונות ב-system_foods לעדכון מחירים")
+        return
+
+    ids = [r[0] for r in rows]
+    product_names = [r[1] for r in rows]
+
+    # 2) סקרייפינג
     shufersal = get_prices_shufersal(product_names)
     victory = get_prices_victory(product_names)
     rami = get_prices_from_rami_levy(product_names)
 
-    for i, food in enumerate(system_foods_db):
-        food["prices"]["shufersal"] = shufersal[i] * 100 if shufersal[i] > 0 else None
-        food["prices"]["victory"] = victory[i] * 100 if victory[i] > 0 else None
-        food["prices"]["rami_levy"] = rami[i] * 100 if rami[i] > 0 else None
+    # 3) שמירה חזרה ל-DB
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    for i, food_id in enumerate(ids):
+        shuf = shufersal[i] * 100 if shufersal[i] and shufersal[i] > 0 else None
+        vic  = victory[i]   * 100 if victory[i]   and victory[i]   > 0 else None
+        ram  = rami[i]      * 100 if rami[i]      and rami[i]      > 0 else None
+
+        cursor.execute("""
+            UPDATE system_foods
+            SET price_shufersal = ?,
+                price_victory = ?,
+                price_rami_levy = ?
+            WHERE id = ?
+        """, (shuf, vic, ram, food_id))
+
+    conn.commit()
+    conn.close()
 
     last_prices_update = datetime.now()
-    print(f"🕒 מחירים עודכנו ב‑{last_prices_update}")
+    print(f"🕒 מחירים עודכנו ב-{last_prices_update}")
+
 
 
 
@@ -479,9 +517,14 @@ def run_optimizer_for_all_price_sources(foods_db, user_params, price_sources):
                     p for k, p in f["prices"].items()
                     if k != "manual" and p is not None
                 ]
-                if not other_prices:
-                    continue
-                price = sum(other_prices) / len(other_prices)
+                if other_prices:
+                    price = sum(other_prices) / len(other_prices)
+                else:
+                    # ✅ נפילה ל-manual במקום לזרוק את המזון
+                    price = f["prices"].get("manual")
+                    if price is None:
+                        continue
+
 
             f_copy = copy.deepcopy(f)
             f_copy["prices"] = {"temp": price}
@@ -713,25 +756,33 @@ def get_user_foods_list(user_id):
     """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    
+
     # שליפת רשימת המזונות הבסיסית מהמערכת
     cursor.execute('SELECT * FROM system_foods')
     system_foods = cursor.fetchall()
-    
-    # המרה למבנה נתונים מוכר
+
     foods = []
     columns = [desc[0] for desc in cursor.description]
+
     for row in system_foods:
         food = dict(zip(columns, row))
-        # המרת נתוני מחירים למבנה מחירים
+
+        # ✅ המרת allowed_meals מ-JSON string לרשימה
+        try:
+            food["allowed_meals"] = json.loads(food.get("allowed_meals") or "[]")
+        except:
+            food["allowed_meals"] = []
+
+        # ✅ המרת נתוני מחירים למבנה מחירים (רק פעם אחת!)
         food['prices'] = {
             'manual': food.pop('price_manual', None),
             'shufersal': food.pop('price_shufersal', None),
             'rami_levy': food.pop('price_rami_levy', None),
             'victory': food.pop('price_victory', None)
         }
+
         foods.append(food)
-    
+
     # שליפת השינויים האישיים של המשתמש
     cursor.execute('''
         SELECT food_id, action, food_data 
@@ -739,31 +790,29 @@ def get_user_foods_list(user_id):
         WHERE user_id = ? 
         ORDER BY created_at
     ''', (user_id,))
-    
+
     user_changes = cursor.fetchall()
-    
+
     # יישום השינויים האישיים על רשימת המזונות
     for food_id, action, food_data in user_changes:
         food_data = json.loads(food_data) if food_data else {}
-        
+
         if action == 'delete':
-            # מחיקת מזון מהרשימה
             foods = [f for f in foods if f['id'] != food_id]
-        
+
         elif action == 'add':
-            # הוספת מזון חדש
             if not any(f['id'] == food_id for f in foods):
                 foods.append(food_data)
-        
+
         elif action == 'edit':
-            # עדכון מזון קיים
             for idx, food in enumerate(foods):
                 if food['id'] == food_id:
                     foods[idx] = food_data
                     break
-    
+
     conn.close()
     return foods
+
 
 
 @app.route('/api/foods', methods=['GET'])
@@ -889,29 +938,14 @@ def update_food(food_id):
     data = request.get_json()
     user_id = session.get('user_id')
 
-    # קבלת רשימת המזונות האישית של המשתמש
+    # בדיקה שהפריט קיים ברשימת המזונות של המשתמש
     user_foods = get_user_foods_list(user_id)
+    if not any(f['id'] == food_id for f in user_foods):
+        return jsonify({'success': False, 'message': 'המזון לא נמצא'}), 404
 
-    # 1️⃣ מציאת הפריט והאינדקס שלו
-    old_index = None
-    for idx, food in enumerate(user_foods):
-        if food['id'] == food_id:
-            old_index = idx
-            break
-
-    if old_index is None:
-        return jsonify({'success': False}), 404
-
-    # 2️⃣ יצירת ID חדש (max + 1)
-    existing_ids = [
-        int(f["id"]) for f in user_foods
-        if str(f["id"]).isdigit()
-    ]
-    new_id = str(max(existing_ids) + 1 if existing_ids else 1)
-
-    # 3️⃣ יצירת פריט חדש מהנתונים שנשלחו
-    new_food = {
-        'id': new_id,
+    # יצירת אובייקט מזון מעודכן (עם אותו ID!)
+    updated_food = {
+        'id': food_id,
         'name': data['name'],
         'protein': float(data['protein']),
         'calories': float(data['calories']),
@@ -928,26 +962,26 @@ def update_food(food_id):
         'allowed_meals': data['allowed_meals']
     }
 
-    # 🆕 שמירת השינוי האישי למסד הנתונים
+    # שמירת העריכה במסד הנתונים
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO user_foods (user_id, food_id, action, food_data)
         VALUES (?, ?, 'edit', ?)
-    ''', (user_id, new_id, json.dumps(new_food)))
+    ''', (user_id, food_id, json.dumps(updated_food, ensure_ascii=False)))
     conn.commit()
     conn.close()
 
-    # 6️⃣ התחלת עדכון מחירים אסינכרוני (כמו בהוספה)
-    task_id = start_price_update_task(new_id, new_food['name'])
+    # התחלת עדכון מחירים אסינכרוני
+    task_id = start_price_update_task(food_id, updated_food['name'])
 
-    # 7️⃣ החזרת תשובה ל־Frontend
     return jsonify({
         'success': True,
-        'message': 'המזון נשמר בהצלחה',
-        'data': new_food,
+        'message': 'המזון עודכן בהצלחה',
+        'data': updated_food,
         'task_id': task_id
     })
+
 
 @app.route('/export-shopping-list/excel', methods=['POST'])
 def export_shopping_list_excel():
