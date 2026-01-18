@@ -52,12 +52,13 @@ print("vv")
 print("hhh")
 
 # DB_NAME = "/data/nutrioptimal.db"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BABASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-if os.environ.get("RAILWAY_ENVIRONMENT"):
-    DB_NAME = "/data/nutrioptimal.db"   # Railway / שרת
-else:
-    DB_NAME = os.path.join(BASE_DIR, "nutrioptimal.db")  # מקומי (Windows)
+DB_NAME = os.environ.get(
+    "DB_PATH",
+    os.path.join(BASE_DIR, "nutrioptimal.db")
+)
+
 
 last_prices_update = None
 
