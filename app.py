@@ -52,12 +52,13 @@ print("vv")
 print("hhh")
 
 # DB_NAME = "/data/nutrioptimal.db"
-BABASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DB_NAME = os.environ.get(
     "DB_PATH",
     os.path.join(BASE_DIR, "nutrioptimal.db")
 )
+
 
 
 last_prices_update = None
@@ -1568,18 +1569,18 @@ def calculate_menu():
         }), 500
 
 
-# if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-#     scheduler = BackgroundScheduler()
+if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    scheduler = BackgroundScheduler()
 
-#     scheduler.add_job(
-#         func=nightly_price_update,
-#         trigger=CronTrigger(hour=3, minute=0),  # כל יום ב‑03:00
-#         id='nightly_price_update',
-#         replace_existing=True
-#     )
+    scheduler.add_job(
+        func=nightly_price_update,
+        trigger=CronTrigger(hour=3, minute=0),  # כל יום ב‑03:00
+        id='nightly_price_update',
+        replace_existing=True
+    )
 
-#     scheduler.start()
+    scheduler.start()
 
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+# if __name__ == '__main__':
+#     app.run(debug=True, host='0.0.0.0', port=5001)
