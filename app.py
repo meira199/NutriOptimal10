@@ -1575,14 +1575,15 @@ def calculate_menu():
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     scheduler = BackgroundScheduler()
 
+    scheduler = BackgroundScheduler()
     scheduler.add_job(
         func=nightly_price_update,
-        trigger=CronTrigger(hour=3, minute=0),  # כל יום ב‑03:00
+        trigger=CronTrigger(hour=3, minute=0),
         id='nightly_price_update',
         replace_existing=True
     )
-
     scheduler.start()
+
 
 
 if __name__ == "__main__":
