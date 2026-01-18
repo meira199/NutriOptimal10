@@ -61,6 +61,9 @@ DB_NAME = os.environ.get(
 
 
 
+
+
+
 last_prices_update = None
 
 # ============================
@@ -1582,5 +1585,5 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     scheduler.start()
 
 
-# if __name__ == '__main__':
-#     app.run(debug=True, host='0.0.0.0', port=5001)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5001)
