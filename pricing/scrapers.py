@@ -1,20 +1,19 @@
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-
+import os
 import urllib.parse
 import re
 import time
 
 
-def get_prices_shufersal(products):
-    # ===============================
-    # Chrome Headless
-    # ===============================
+def create_driver():
+    chrome_bin = os.environ.get("CHROME_BIN")
+    driver_bin = os.environ.get("CHROMEDRIVER_BIN")
+
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
@@ -22,6 +21,25 @@ def get_prices_shufersal(products):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
 
+    # =========================
+    # Railway / Server
+    # =========================
+    if chrome_bin and driver_bin:
+        options.binary_location = chrome_bin
+        service = Service(driver_bin)
+        return webdriver.Chrome(service=service, options=options)
+
+    # =========================
+    # Local (VS Code / Windows)
+    # =========================
+    return webdriver.Chrome(options=options)
+
+
+
+def get_prices_shufersal(products):
+    # ===============================
+    # Chrome Headless
+   
     # ===============================
     # המרה למחיר ל־גרם
     # ===============================
@@ -70,10 +88,8 @@ def get_prices_shufersal(products):
     # ===============================
     # פתיחת דפדפן
     # ===============================
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
+    driver = create_driver()
+
 
     wait = WebDriverWait(driver, 15)
     price_per_gram_list = []
@@ -177,17 +193,10 @@ def get_prices_victory(products):
     # ===============================
     # Chrome Headless
     # ===============================
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+   
+   
+    driver = create_driver()
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
 
     wait = WebDriverWait(driver, 15)
     price = []
@@ -270,17 +279,11 @@ def get_prices_from_rami_levy(products):
     # ===============================
     # Chrome Headless
     # ===============================
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    
+  
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
+    driver = create_driver()
+
 
     wait = WebDriverWait(driver, 25)
 

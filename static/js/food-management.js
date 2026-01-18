@@ -466,10 +466,7 @@ async function pollPriceUpdateTask(taskId) {
                     // טעינה מחדש של המזונות כדי להציג את המחירים החדשים
                     await loadFoods();
                     
-                    // רענון הדף אחרי 2 שניות
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 2000);
+                    // ✅ הסרתי את רענון הדף - טעינת המזונות מספיקה!
 
                 } else if (task.status === 'failed') {
                     // ============================================================
@@ -487,9 +484,8 @@ async function pollPriceUpdateTask(taskId) {
                 // ============================================================
                 clearInterval(pollInterval);
                 showNotification('⚠️ עדכון המחירים לוקח זמן רב מהרגיל, הדף ירענן אוטומטית', 5000);
-                setTimeout(() => {
-                    window.location.reload();
-                }, 3000);
+                // ✅ טעינה מחדש של המזונות במקום רענון הדף
+                await loadFoods();
             }
 
         } catch (e) {

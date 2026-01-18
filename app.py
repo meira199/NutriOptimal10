@@ -51,7 +51,14 @@ CORS(app)
 print("vv")
 print("hhh")
 
-DB_NAME = "/data/nutrioptimal.db"
+# DB_NAME = "/data/nutrioptimal.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+if os.environ.get("RAILWAY_ENVIRONMENT"):
+    DB_NAME = "/data/nutrioptimal.db"   # Railway / שרת
+else:
+    DB_NAME = os.path.join(BASE_DIR, "nutrioptimal.db")  # מקומי (Windows)
+
 last_prices_update = None
 
 # ============================
@@ -816,6 +823,14 @@ def get_user_foods_list(user_id):
         elif action == 'edit':
             for idx, food in enumerate(foods):
                 if food['id'] == food_id:
+                    # ✅ שמירה על המחירים מהסופרמרקטים מהמערכת
+                    # אם יש מחירים מהסופרמרקטים ב-system_foods, שומרים אותם
+                    if 'prices' in food:
+                        food_data.setdefault('prices', {})
+                        # שומרים רק את המחירים מהסופרמרקטים שקיימים
+                        for source in ['shufersal', 'victory', 'rami_levy']:
+                            if food['prices'].get(source) is not None:
+                                food_data['prices'][source] = food['prices'][source]
                     foods[idx] = food_data
                     break
 
@@ -1552,17 +1567,17 @@ def calculate_menu():
         }), 500
 
 
-if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-    scheduler = BackgroundScheduler()
+# if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+#     scheduler = BackgroundScheduler()
 
-    scheduler.add_job(
-        func=nightly_price_update,
-        trigger=CronTrigger(hour=3, minute=0),  # כל יום ב‑03:00
-        id='nightly_price_update',
-        replace_existing=True
-    )
+#     scheduler.add_job(
+#         func=nightly_price_update,
+#         trigger=CronTrigger(hour=3, minute=0),  # כל יום ב‑03:00
+#         id='nightly_price_update',
+#         replace_existing=True
+#     )
 
-    scheduler.start()
+#     scheduler.start()
 
 
 if __name__ == '__main__':
